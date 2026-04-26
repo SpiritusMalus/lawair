@@ -138,6 +138,7 @@ celerybeat.pid
 CLAUDE.md
 COMMANDS.md
 .claude/
+COMPETITORS.md
 
 # Environments
 .env

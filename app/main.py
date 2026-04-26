@@ -1,43 +1,34 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.database import get_db
-from app.models import User
-from app.schemas import UserCreate, UserOut, Token
-from app.auth import (
-    get_password_hash,
-    verify_password,
-    create_access_token,
-    get_current_user,
-)
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.config import settings
-
-app = FastAPI(title=settings.PROJECT_NAME)
-
-
-@app.post("/auth/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
-    exists = await db.execute(select(User).where(User.email == data.email))
-    if exists.scalar_one_or_none():
-        raise HTTPException(400, "Email already registered")
-    user = User(email=data.email, hashed_password=get_password_hash(data.password))
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    return user
+from app.core.search import ensure_index, make_client
+from app.routers import auth, deals, lawyers, profile, services, users
 
 
-@app.post("/auth/login", response_model=Token)
-async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(User).where(User.email == form.username))
-    user = res.scalar_one_or_none()
-    if not user or not user.is_active or not verify_password(form.password, user.hashed_password):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
-    token = create_access_token({"sub": str(user.id)})
-    return {"access_token": token, "token_type": "bearer"}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    es = make_client()
+    await ensure_index(es)
+    await es.close()
+    yield
 
 
-@app.get("/users/me", response_model=UserOut)
-async def read_me(current_user: User = Depends(get_current_user)):
-    return current_user
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.FRONTEND_URL],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(profile.router)
+app.include_router(services.router)
+app.include_router(lawyers.router)
+app.include_router(deals.router)
